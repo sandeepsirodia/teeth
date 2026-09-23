@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teeth"
+version = "0.1.0"
+description = "Your tests are green. Do they bite? Diff-scoped mutation testing for agent-written code."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Sandeep Sirodia" }]
+requires-python = ">=3.9"
+keywords = ["mutation-testing", "testing", "claude-code", "ai-agents", "code-review", "ci"]
+classifiers = ["Programming Language :: Python :: 3", "Topic :: Software Development :: Testing", "Environment :: Console"]
+
+[project.urls]
+Homepage = "https://github.com/sandeepsirodia/teeth"
+
+[project.scripts]
+teeth = "teeth:main"
+
+[tool.setuptools]
+py-modules = ["teeth"]
