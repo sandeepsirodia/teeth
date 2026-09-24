@@ -298,6 +298,14 @@ class TestReviewFindings(unittest.TestCase):
         self.assertIn("--base", str(cm.exception))
 
 
+class TestKnownLimits(unittest.TestCase):
+    def test_a_fix_that_lives_inside_a_regex_string_yields_no_mutants(self):
+        # Real case (simonw/datasette #2680): the whole change is inside the pattern string.
+        py = '    location = re.sub(r"^[/\\\\]+", "/", location)\n'
+        mutants, _ = teeth.mutants_for_file("asgi.py", py, {1}, "py")
+        self.assertEqual(mutants, [])
+
+
 class TestLexerAndMutators(unittest.TestCase):
     def test_rust_lifetimes_are_not_strings(self):
         rs = "fn f<'a>(x: &'a str) -> bool { x.len() > 3 }\n"

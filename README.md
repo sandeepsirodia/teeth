@@ -138,6 +138,7 @@ teeth writing a wrong verdict would be worse than no verdict, so:
 ## Honest limits
 
 - Mutations are text-level (with real lexing), not AST-perfect. Some mutants won't compile (e.g. a `<` inside TypeScript generics); those count as caught, which slightly flatters the score.
+- **Regex patterns and string constants are never mutated**, because strings are masked so they can't be corrupted. A real example: datasette's fix for an open redirect changed `re.sub(r"^/+", …)` to `re.sub(r"^[/\\]+", …)`. The whole fix lives inside a string, so teeth reports "nothing to mutate" for it. Mutation testing of regexes needs a different tool.
 - Equivalent mutants exist (see above). teeth can't prove equivalence; you waive them with a reason.
 - A score is about **your changed lines only**. It says nothing about code you didn't touch.
 
