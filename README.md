@@ -91,7 +91,23 @@ Mutation score: 9/15 caught (60%)
 
 Those are real questions for the tests: nothing pins the exact length where condensing starts, the empty-container case, or a missing model id. That's no criticism of a well-tested project. It's what 150 lines of good tests still leave open, and it takes a mutation tool to see it.
 
+I first ran it against the commit's own test file (160 tests), then against every llm test file that's green in my environment (763 tests): **the same 9/15 and the same six survivors both times**, so it isn't an artifact of a narrow test selection.
+
 The first time I ran this, teeth said **0/16**. llm is installed in editable mode, so every import went back to the original checkout and none of the mutants ever ran. That's now fixed (the copy is put first on `PYTHONPATH`), and more importantly **guarded**: teeth replaces each changed file with garbage before starting, and if your tests still pass, it tells you they never load that file instead of reporting fake survivors.
+
+## More real runs: Claude-written commits in simonw/datasette
+
+| Commit | What it did | Score |
+|---|---|---|
+| [`96226621`](https://github.com/simonw/datasette/commit/96226621) | Fix SQL injection in `escape_sqlite()` | **3/3 caught**: the fix is well pinned |
+| [`211e70d4`](https://github.com/simonw/datasette/commit/211e70d4) | Return 400 instead of 500 for wrong-arity row URLs | **3/3 caught** |
+| [`591b909a`](https://github.com/simonw/datasette/commit/591b909a) | Escape table names containing `[brackets]` | 0/1 with the commit's own test file, **1/1 with the whole suite** |
+| [`1c514d69`](https://github.com/simonw/datasette/commit/1c514d69) | Fix open redirect via backslash | nothing to mutate (the fix is inside a regex string) |
+
+Two lessons the third and fourth rows taught me:
+
+- **A survivor only means "not caught by the tests you ran".** Run just the changed test file and teeth will report survivors that the rest of the suite catches. Pass your real test command (the whole suite, or a fast marker-selected subset) before reading anything into a low score.
+- **teeth refuses to score a red suite.** My first datasette run stopped with "your tests fail without any mutation" because I'd installed dependencies at the wrong commit. That's the tool working as designed: a mutation score over failing tests would be meaningless.
 
 ## I ran it on my own code first
 
