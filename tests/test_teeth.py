@@ -260,6 +260,44 @@ class TestRealWorldTraps(unittest.TestCase):
         self.assertFalse([m for m in mutants if m["op"] == "return"])
 
 
+class TestReviewFindings(unittest.TestCase):
+    def test_target_dir_is_never_shared_with_the_real_checkout(self):
+        repo = fixture()
+        os.makedirs(os.path.join(repo, "target", "debug"))
+        write(repo, "Cargo.toml", "[package]\nname = 'x'\n")
+        copy = teeth.make_copy(repo)
+        try:
+            self.assertFalse(os.path.lexists(os.path.join(copy, "target")))       # not copied, not symlinked
+            seen = {}
+            import unittest.mock as mock
+            with mock.patch.object(teeth.subprocess, "Popen") as popen:
+                popen.return_value.wait.return_value = 0
+                teeth.run_tests("cargo test", copy, 5)
+                seen = popen.call_args.kwargs["env"]
+            self.assertEqual(seen["CARGO_TARGET_DIR"], os.path.join(copy, ".teeth-target"))
+        finally:
+            teeth.shutil.rmtree(copy, ignore_errors=True)
+
+    def test_node_modules_is_still_symlinked_not_copied(self):
+        repo = fixture()
+        os.makedirs(os.path.join(repo, "node_modules", "pkg"))
+        copy = teeth.make_copy(repo)
+        try:
+            self.assertTrue(os.path.islink(os.path.join(copy, "node_modules")))
+        finally:
+            teeth.shutil.rmtree(copy, ignore_errors=True)
+
+    def test_repo_with_no_base_gives_a_friendly_error_not_a_traceback(self):
+        repo = tempfile.mkdtemp(prefix="teeth-fixture-")
+        write(repo, "a.py", "x = 1\n")
+        git(repo, "init", "-q", "-b", "trunk")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "only commit")        # no main/master, and HEAD~1 doesn't exist
+        with self.assertRaises(SystemExit) as cm:
+            cli(repo, "--list")
+        self.assertIn("--base", str(cm.exception))
+
+
 class TestLexerAndMutators(unittest.TestCase):
     def test_rust_lifetimes_are_not_strings(self):
         rs = "fn f<'a>(x: &'a str) -> bool { x.len() > 3 }\n"

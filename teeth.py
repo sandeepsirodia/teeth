@@ -23,7 +23,10 @@ LANGS = {".py": "py", ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "js", ".t
          ".go": "go", ".rs": "rs"}
 TEST_RE = re.compile(r"(^|/)(tests?|__tests__|specs?)/|(^|/)test_[^/]+\.py$|_test\.(py|go)$|"
                      r"\.(test|spec)\.[cm]?[jt]sx?$")
-HEAVY_DIRS = {"node_modules", ".venv", "venv", "target", ".tox", "vendor"}  # symlinked, not copied
+HEAVY_DIRS = {"node_modules", ".venv", "venv", ".tox", "vendor"}  # read-only inputs: symlinked, not copied
+# Build output: never copied, never shared. `target/` in particular is written by every `cargo test`, so a
+# symlink back to the real checkout would let parallel mutants fight over one lock and dirty your tree.
+BUILD_DIRS = {"target"}
 CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}  # never copied: stale caches hide mutants
 IGNORE_RE = re.compile(r"teeth:\s*ignore\b\W*(.*)")
 
@@ -249,7 +252,7 @@ def make_copy(repo):
 
     def ignore(src, names):
         return [n for n in names if n == ".git" or n in CACHE_DIRS or n.endswith(".pyc")
-                or (n in HEAVY_DIRS and os.path.abspath(src) == repo)]
+                or (n in HEAVY_DIRS | BUILD_DIRS and os.path.abspath(src) == repo)]
 
     shutil.copytree(repo, d, dirs_exist_ok=True, ignore=ignore, symlinks=True)
     for h in HEAVY_DIRS:
@@ -271,6 +274,8 @@ def run_tests(cmd, cwd, timeout):
     # No bytecode cache: a same-size mutant written within the same second as the original would
     # otherwise run the cached original bytecode, and the mutant would silently never execute.
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if os.path.exists(os.path.join(cwd, "Cargo.toml")):
+        env["CARGO_TARGET_DIR"] = os.path.join(cwd, ".teeth-target")   # one private build dir per worker copy
     # Import the *copy*: an editable install (pip/uv -e) would otherwise send every import back to the
     # original checkout, and no mutant would ever run.
     paths = [cwd] + ([os.path.join(cwd, "src")] if os.path.isdir(os.path.join(cwd, "src")) else [])
@@ -478,7 +483,12 @@ def main(argv=None, out=None, stdin=None):
     if not a.test_cmd and not a.list:
         ap.error("give the test command, e.g.  teeth 'pytest -q'")
     repo = os.path.abspath(a.repo)
-    mutants, waived = collect(repo, a.base or default_base(repo))
+    base = a.base or default_base(repo)
+    try:
+        mutants, waived = collect(repo, base)
+    except subprocess.CalledProcessError as e:
+        raise SystemExit("teeth: could not diff against %r: %s\nPass the branch you started from, e.g. --base main"
+                         % (base, (e.stderr or "").strip().splitlines()[-1:] or "git failed")) from e
     mutants = sample(mutants, a.max_mutants, a.seed)
     if a.list:
         for m in mutants:
