@@ -71,6 +71,26 @@ teeth install-hook --test-cmd 'pytest -q' --min-score 0.8
 
 Now when your agent says "done, all tests pass", teeth runs first. If mutants survive, the agent gets told exactly which behavior changes its tests missed, and it goes back to write the assertion. It only blocks once per turn, so it can never loop.
 
+## On a real Claude-written commit
+
+[simonw/llm](https://github.com/simonw/llm) commit [`e1267a4`](https://github.com/simonw/llm/commit/e1267a4) (co-authored with Claude) added JSON payload condensing plus 150 lines of tests. teeth, 20 sampled mutants, 45 seconds:
+
+```
+Mutation score: 9/15 caught (60%)
+  llm/logs.py
+    :925  comparison if size >= _CONDENSE_MIN_LENGTH:
+               → if size > _CONDENSE_MIN_LENGTH:
+    :918  condition  if isinstance(value, (dict, list)) and value:
+               → if True:
+    :1026 condition  if not model_id:
+               → if False:
+    …
+```
+
+Those are real questions for the tests: nothing pins the exact length where condensing starts, the empty-container case, or a missing model id. That's no criticism of a well-tested project. It's what 150 lines of good tests still leave open, and it takes a mutation tool to see it.
+
+The first time I ran this, teeth said **0/16**. llm is installed in editable mode, so every import went back to the original checkout and none of the mutants ever ran. That's now fixed (the copy is put first on `PYTHONPATH`), and more importantly **guarded**: teeth replaces each changed file with garbage before starting, and if your tests still pass, it tells you they never load that file instead of reporting fake survivors.
+
 ## I ran it on my own code first
 
 The morning I wrote teeth, I pointed it at a fix I'd just committed to [readme-lies](https://github.com/sandeepsirodia/readme-lies):
@@ -96,6 +116,7 @@ teeth writing a wrong verdict would be worse than no verdict, so:
 
 - **Your working tree is never touched.** Mutants live in temporary copies; heavy directories like `node_modules` are symlinked, not copied.
 - **Every mutant really runs.** Build caches (`__pycache__`, etc.) are stripped and timestamps are bumped. Without that, a same-size edit like `n -= 1` → `n -= 0` can silently run the *cached original*. I hit exactly that bug while building teeth; there's now a regression test for it.
+- **Every file is proven to be exercised.** Before any mutant runs, each changed file is replaced with garbage. If your tests still pass, that file isn't loaded by your test command (not imported, or imported from an installed copy), so its mutants are skipped and flagged, never reported as fake survivors.
 - **Infinite loops count as caught.** A mutant that makes your tests hang is killed at `--timeout`, whole process tree included.
 - **Deterministic.** Same results with `-j 1` and `-j 8`. `--max-mutants 50` samples evenly across files with a fixed seed.
 
@@ -117,6 +138,15 @@ teeth writing a wrong verdict would be worse than no verdict, so:
 - Mutations are text-level (with real lexing), not AST-perfect. Some mutants won't compile (e.g. a `<` inside TypeScript generics); those count as caught, which slightly flatters the score.
 - Equivalent mutants exist (see above). teeth can't prove equivalence; you waive them with a reason.
 - A score is about **your changed lines only**. It says nothing about code you didn't touch.
+
+## Prior art, and what's new here
+
+Mutation testing is decades old, and diff-scoped runs aren't new either: [cargo-mutants `--in-diff`](https://mutants.rs/in-diff.html), [Stryker](https://stryker-mutator.io/), [PIT](https://pitest.org/), [mutmut](https://github.com/boxed/mutmut), gomutants and mull all do real mutation testing. **They understand their language far better than teeth does. If one exists for your stack, use it.**
+
+teeth is for the gap around them:
+- **one zero-install tool** across Python, JS/TS, Go and Rust
+- **a Claude Code Stop hook**, so the agent that wrote the tests has to answer for them
+- **a canary check** that refuses to report mutants in files your tests never load
 
 <details>
 <summary><b>Development</b></summary>

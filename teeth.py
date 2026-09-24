@@ -104,9 +104,9 @@ def _line_ops(line, masked, lang):
     out = []
     if lang == "py":
         m = re.match(r"(\s*)return\b\s*(\S.*)$", masked)
-        if m and m.group(2).strip() not in ("None",):
+        if m and m.group(2).strip() not in ("None",) and _balanced(code) and not code.endswith(("\\", ",")):
             out.append(("return", indent + "return None"))
-        if re.match(r"raise\b", code):
+        if re.match(r"raise\b", code) and _balanced(code):
             out.append(("delete", indent + "pass"))
         m = re.match(r"(\s*)(el)?if\s+(.+):\s*$", masked)
         if m:
@@ -117,9 +117,9 @@ def _line_ops(line, masked, lang):
     else:
         if lang == "js":
             m = re.match(r"return\b\s*(\S.*?);?\s*$", code)
-            if m and m.group(1) not in ("null", "undefined", ";"):
+            if m and m.group(1) not in ("null", "undefined", ";") and _balanced(code):
                 out.append(("return", indent + "return null;"))
-        if re.match(r"throw\b", code):
+        if re.match(r"throw\b", code) and _balanced(code):
             out.append(("delete", indent + ";" if lang == "js" else indent + "{}"))
         m = re.match(r"(\s*)((?:}\s*else\s+)?if\s*)\((.+)\)\s*(\{?)\s*$", masked)
         if m:
@@ -271,6 +271,10 @@ def run_tests(cmd, cwd, timeout):
     # No bytecode cache: a same-size mutant written within the same second as the original would
     # otherwise run the cached original bytecode, and the mutant would silently never execute.
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # Import the *copy*: an editable install (pip/uv -e) would otherwise send every import back to the
+    # original checkout, and no mutant would ever run.
+    paths = [cwd] + ([os.path.join(cwd, "src")] if os.path.isdir(os.path.join(cwd, "src")) else [])
+    env["PYTHONPATH"] = os.pathsep.join(paths + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     try:
@@ -284,12 +288,37 @@ def run_tests(cmd, cwd, timeout):
         return "timeout"
 
 
+CANARY = "teeth canary: this file was replaced on purpose to check that your tests load it\n"
+
+
+def unexercised_files(copy, files, test_cmd, timeout):
+    """Replace each file with garbage and run the tests. If they still pass, the test command never
+    loads that file from teeth's copy (not imported, or imported from somewhere else), so its mutants
+    can't tell you anything, and reporting them as 'survived' would be a lie."""
+    out = []
+    for f in sorted(set(files)):
+        path = os.path.join(copy, f)
+        with open(path, encoding="utf-8") as fh:
+            original = fh.read()
+        write_touch(path, CANARY)
+        try:
+            cmd = test_cmd.replace("{file}", f)
+            if run_tests(cmd, copy, timeout) == "passed":
+                out.append(f)
+        finally:
+            write_touch(path, original)
+    return out
+
+
 def evaluate(repo, mutants, test_cmd, jobs=1, timeout=None):
-    """Run the tests once per mutant, each worker in its own copy of the repo. Returns results in input order."""
+    """Run the tests once per mutant, each worker in its own copy of the repo. Returns results in input
+    order; mutants in files the tests never load get status 'unexercised' instead of a fake 'survived'."""
     copies = [make_copy(repo) for _ in range(max(1, jobs))]
     try:
         if run_tests(test_cmd, copies[0], timeout) != "passed":
             raise SystemExit("teeth: your tests fail (or time out) without any mutation. Fix them first.")
+        skip = set(unexercised_files(copies[0], [m["file"] for m in mutants], test_cmd, timeout))
+        live = [m for m in mutants if m["file"] not in skip]
         free = list(copies)
         lock = threading.Lock()
 
@@ -312,14 +341,15 @@ def evaluate(repo, mutants, test_cmd, jobs=1, timeout=None):
                     free.append(d)
 
         with ThreadPoolExecutor(max_workers=len(copies)) as pool:
-            outcomes = list(pool.map(one, mutants))
+            outcomes = dict(zip(map(id, live), pool.map(one, live)))
     finally:
         for d in copies:
             shutil.rmtree(d, ignore_errors=True)
-    return [dict(m, status=s) for m, s in zip(mutants, outcomes)]
+    return [dict(m, status=outcomes.get(id(m), "unexercised")) for m in mutants]
 
 
 def score(results):
+    results = [r for r in results if r["status"] != "unexercised"]
     total = len(results)
     caught = sum(r["status"] in ("killed", "timeout") for r in results)
     return (caught / total) if total else None
@@ -330,17 +360,24 @@ def score(results):
 def report(results, waived, out, fmt="text"):
     s = score(results)
     survivors = [r for r in results if r["status"] == "survived"]
+    unexercised = sorted({r["file"] for r in results if r["status"] == "unexercised"})
+    if unexercised:
+        out.write("⚠ Your tests pass even when these files are replaced with garbage, so they never load them "
+                  "(not imported by this test command, or imported from another path such as an installed copy). "
+                  "Their %d mutant(s) were skipped:\n%s\n\n" % (
+                      sum(r["status"] == "unexercised" for r in results), "".join("    %s\n" % f for f in unexercised)))
     if fmt == "github":
         for r in survivors:
             out.write("::warning file=%s,line=%d::teeth: mutant survived (%s): %s  →  %s\n" % (
                 r["file"], r["line"], r["op"], r["before"], r["after"]))
     if s is None:
-        out.write("No mutable code in the changed lines.\n")
+        out.write("No mutable code in the changed lines that your tests exercise.\n")
         return
     killed = sum(r["status"] == "killed" for r in results)
     timeouts = sum(r["status"] == "timeout" for r in results)
+    counted = sum(r["status"] != "unexercised" for r in results)
     out.write("Mutation score: %d/%d caught (%.0f%%)%s\n" % (
-        killed + timeouts, len(results), 100 * s, " — %d by timeout" % timeouts if timeouts else ""))
+        killed + timeouts, counted, 100 * s, " — %d by timeout" % timeouts if timeouts else ""))
     if survivors:
         out.write("\n%d mutant(s) survived. Your tests did not notice these behavior changes:\n" % len(survivors))
         cur = None

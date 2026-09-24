@@ -218,6 +218,48 @@ class TestMutantsReallyRun(unittest.TestCase):
             self.assertEqual({r["after"]: r["status"] for r in data["results"]}["n -= 0"], "timeout")
 
 
+class TestRealWorldTraps(unittest.TestCase):
+    """Regressions from running teeth on a real repo (simonw/llm): 0/16 'caught' was a lie."""
+
+    def test_editable_install_elsewhere_is_detected_not_reported_as_survivors(self):
+        # Tests import billing from a *different* directory (like an editable install pointing at the
+        # original checkout), so teeth's mutated copy is never loaded.
+        repo = fixture()
+        elsewhere = tempfile.mkdtemp(prefix="teeth-fixture-installed-")
+        with open(os.path.join(elsewhere, "billing.py"), "w") as f:
+            f.write(FEATURE_CODE)
+        cmd = "PYTHONPATH=%s %s -I -c \"import sys; sys.path.insert(0, %r); import unittest; " \
+              "unittest.main(module=None, argv=['x', 'discover', '-s', 'tests', '-q'])\"" % (elsewhere, PY, elsewhere)
+        data = json.loads(cli(repo, "--json", cmd)[1])
+        self.assertEqual({r["status"] for r in data["results"]}, {"unexercised"})
+        self.assertIsNone(data["score"])
+        code, out = cli(repo, cmd)
+        self.assertIn("never load them", out)
+
+    def test_src_layout_copy_is_imported(self):
+        repo = tempfile.mkdtemp(prefix="teeth-fixture-src-")
+        write(repo, "src/billing.py", BASE_CODE)
+        write(repo, "tests/test_billing.py", WEAK_TEST.split("        def test_over")[0].rstrip() + "\n")
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "base")
+        git(repo, "checkout", "-qb", "feature")
+        write(repo, "src/billing.py", FEATURE_CODE)
+        write(repo, "tests/test_billing.py", WEAK_TEST)
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "guard")
+        # the original checkout is on sys.path too (like an editable install): the copy must still win
+        cmd = "PYTHONPATH=$PYTHONPATH:%s/src %s -m unittest discover -s tests -q" % (repo, PY)
+        data = json.loads(cli(repo, "--json", cmd)[1])
+        self.assertEqual([r["after"] for r in data["results"] if r["status"] == "survived"],
+                         ["if amount >= limit:  # guard"])
+
+    def test_multiline_return_is_not_blanked(self):
+        py = "def f(x):\n    return json.dumps(\n        x,\n    )\n"
+        mutants, _ = teeth.mutants_for_file("m.py", py, {2}, "py")
+        self.assertFalse([m for m in mutants if m["op"] == "return"])
+
+
 class TestLexerAndMutators(unittest.TestCase):
     def test_rust_lifetimes_are_not_strings(self):
         rs = "fn f<'a>(x: &'a str) -> bool { x.len() > 3 }\n"
