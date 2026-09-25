@@ -44,7 +44,7 @@ One boundary test later: 4/4, and that bug can't ship.
 ## Try it on your branch
 
 ```bash
-uvx --from git+https://github.com/sandeepsirodia/teeth teeth 'pytest -q'        # or 'npm test', 'go test ./...', 'cargo test'
+uvx teeth 'pytest -q'        # or 'npm test', 'go test ./...', 'cargo test'
 ```
 
 It only mutates **lines your branch changed** (vs `main`), so it takes seconds to minutes, not the hours classic mutation testing takes on a whole codebase.
