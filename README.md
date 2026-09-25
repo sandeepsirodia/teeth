@@ -73,7 +73,7 @@ Now when your agent says "done, all tests pass", teeth runs first. If mutants su
 
 ## On a real Claude-written commit
 
-<p align="center"><img src="assets/llm-run.svg" alt="teeth on simonw/llm commit e1267a4: 9 of 15 mutants caught; survivors at the condensing length boundary, the empty-container case and a missing model id" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/sandeepsirodia/teeth/main/assets/llm-run.svg" alt="teeth on simonw/llm commit e1267a4: 9 of 15 mutants caught; survivors at the condensing length boundary, the empty-container case and a missing model id" width="820"></p>
 
 [simonw/llm](https://github.com/simonw/llm) commit [`e1267a4`](https://github.com/simonw/llm/commit/e1267a4) (co-authored with Claude) added JSON payload condensing plus 150 lines of tests. teeth, 20 sampled mutants, 45 seconds:
 
